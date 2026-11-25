@@ -10,6 +10,7 @@ The installer adds a small update check, `openhouse-check`, that SteamVR starts 
 
 - Tracking data is used by the driver and saved on your computer (`roommap.json`, `settings.json`, `hostframe.json` in openhouse's config folder). It also reads and updates SteamVR's own `lighthousedb.json`, keeping a backup of it
 - The driver serves its live state to `openhouse-overlay` on `127.0.0.1` (your own computer only, port 36840), and takes commands from it (changing settings, recording, resetting the room etc). Nothing outside your computer can connect to it.
+- When enabled for selected trackers, automatic tracking incident files contain their serials, poses, local filter logs and receiver statistics. The latest 16 files stay in the local openhouse data folder under `tracking-incidents`.
 - Bug reports and recordings are saved on your computer (`Documents/openhouse reports`). They are only sent if you send them yourself. A report contains your device and base station serial numbers, your room map and SteamVR's logs, which can include your Windows user name in file paths. look through it first if that matters to you.
 
 ## Third-party components

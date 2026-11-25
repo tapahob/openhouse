@@ -269,6 +269,7 @@ class SessionImpl final : public Session, public InputSinkBase {
     // that only take devices at startup (Monado) keep it. Cleared on the first attach.
     bool preinitConnected = false;
     double lastData = -1e300;  // host time
+    std::optional<double> lastImuReceived;  // host receipt time, independent of the device clock
     TrackingState lastState = TrackingState::Disconnected;
     // Light mode (live only): 0 = LH1 pulses, 1 = LH2 words; -1 not set yet.
     int lightMode = -1;
@@ -666,6 +667,7 @@ bool SessionImpl::SetUpDevice(const DeviceId& id, const std::string& config) {
     // A radio reconnect is a new timestamp/protocol epoch, not a duplicate attach.
     d.haveClock = false;
     d.clockOffset = 0;
+    d.lastImuReceived.reset();
     d.info.batteryPercent.reset();
     d.info.charging = false;
     d.input.reset();
@@ -847,6 +849,7 @@ void SessionImpl::OnImu(const DeviceId& id, const ImuSample& sample) {
   auto found = devices_.find(id);
   if (found == devices_.end() || !found->second.tracker) return;
   Touch(found->second, sample.time);
+  found->second.lastImuReceived = now_;
   found->second.tracker->OnImu(sample);
   Process(id, found->second);
   UpdateMixedRoom();
@@ -1179,6 +1182,17 @@ void SessionImpl::Process(const DeviceId& id, Device& d) {
   if (out.state != d.lastState) {
     Emit(SessionEventType::TrackingStateChanged, id,
          id + ": " + ToString(d.lastState) + " -> " + ToString(out.state));
+    if (d.info.role == DeviceRole::Tracker) {
+      // Arrival ages distinguish an input stream going quiet from light that still
+      // arrives but cannot be used by the filter. -1 means never observed.
+      const auto ageMs = [&](double t) { return t <= -1e299 ? -1.0 : (now_ - t) * 1000; };
+      char detail[256];
+      std::snprintf(detail, sizeof detail,
+                    "tracking inputs: imuAgeMs=%.1f lh1PulseAgeMs=%.1f lh2BeamAgeMs=%.1f framesHandled=%llu",
+                    ageMs(d.lastImuReceived.value_or(-1e300)), ageMs(d.lastPulse), ageMs(d.lastBeam),
+                    static_cast<unsigned long long>(d.tracker->FramesHandled()));
+      Emit(SessionEventType::Log, id, detail, LogLevel::Debug);
+    }
     d.lastState = out.state;
   }
   MaybeSave();

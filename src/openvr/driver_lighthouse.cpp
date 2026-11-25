@@ -62,6 +62,8 @@ constexpr const char* kStockFile = "driver_lighthouse.so.stock";
 #include "room_publisher.hpp"
 #include "telemetry_server.hpp"
 #include "tracker_names.hpp"
+#include "tracking_incidents.hpp"
+#include <future>
 #include "lh/log_level.hpp"
 #include "lh/build_time.h"
 #include "lh/telemetry.hpp"
@@ -1426,9 +1428,37 @@ class Provider : public IServerTrackedDeviceProvider {
 
  private:
   void Main() {
+    std::vector<std::string> targets;
+    const auto settings = ReadSettings();
+    auto list = settings.find("trackingIncidentSerials");
+    if (!std::getenv("LH_REPLAY") && list != settings.end() && list->is_array())
+      for (const auto& serial : *list) if (serial.is_string()) targets.push_back(serial.get<std::string>());
+    lh::openvr::TrackingIncidents incidents(targets);
+    const bool diagnose = incidents.Enabled();
+    std::future<void> writer;
+    const auto save = [&](lh::openvr::TrackingIncidents::Clip clip) {
+      if (writer.valid() && writer.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+        Log(lh::LogLevel::Warn, "tracking incident skipped: previous write still in progress");
+        return;
+      }
+      try {
+        writer = std::async(std::launch::async, [clip = std::move(clip)] {
+          try {
+            const auto dir = std::filesystem::u8path(lh::platform::DataDirectory()) / "tracking-incidents";
+            const auto file = lh::openvr::SaveTrackingIncident(dir, clip);
+            Log("saved tracking incident to " + lh::platform::PathUtf8(file));
+          } catch (const std::exception& e) {
+            Log(lh::LogLevel::Error, std::string("cannot save tracking incident: ") + e.what());
+          }
+        });
+      } catch (const std::system_error& e) {
+        Log(lh::LogLevel::Error, std::string("cannot start tracking incident writer: ") + e.what());
+      }
+    };
     while (!stop_) {
       const double now = session_->HostNow();
       for (auto& e : session_->PollEvents()) {
+        if (diagnose) incidents.Observe(now, e);
         Log(e.level, e.text, e.serial, now);
         if (g_recorder.On()) {
           char t[32];
@@ -1544,14 +1574,18 @@ class Provider : public IServerTrackedDeviceProvider {
       }
       if (now - lastTelemetry_ >= 0.05) {  // viewers: ~20 Hz is plenty to watch
         lastTelemetry_ = now;
-        g_telemetry.PublishState(now, snapshot_, updates, session_->Receivers(),
+        const auto receivers = session_->Receivers();
+        if (diagnose) for (const auto& r : receivers) incidents.Observe(now, r);
+        g_telemetry.PublishState(now, snapshot_, updates, receivers,
                                  {roomPublisher_.Settled(), roomPublisher_.Epoch(), lh::openvr::RoomSettle::kMaxSigma,
                                   session_->RoomResets()});
       }
       for (const auto& u : updates) {
+        if (diagnose) incidents.Observe(now, u, snapshot_.roomRevision);
         auto found = devices_.find(u.serial);
         if (found != devices_.end()) found->second->Update(u, SteadyNowFor(now));
       }
+      if (auto clip = incidents.Finish(now)) save(std::move(*clip));
       AssignWandHands(updates);
       HandleCommands();
       if (now - lastSettings_ >= 0.25) {
@@ -1560,6 +1594,9 @@ class Provider : public IServerTrackedDeviceProvider {
       }
       lh::platform::SleepFor(std::chrono::microseconds(500));
     }
+    if (writer.valid()) writer.wait();
+    if (auto clip = incidents.Finish(0, true)) save(std::move(*clip));
+    // The async future joins before the driver context is released.
   }
 
   double SteadyNowFor(double sessionNow) const {

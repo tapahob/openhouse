@@ -234,6 +234,14 @@ It shows your devices (tracking state, battery, which base stations see them), y
 ### Settings and files
 Your settings, the learned room and the rest are in `~/.config/lh/` on Linux and `%APPDATA%\lh\` on Windows. Most of the settings can be changed from the overlay. For the files themselves, device roles, disabling devices and the environment variables, see [docs/configuration.md](docs/configuration.md).
 
+## Automatic tracker diagnostics in this fork
+
+The live driver reads `trackingIncidentSerials` from `%APPDATA%/lh/settings.json` (Linux default `~/.config/lh/settings.json`) at startup. Set it to a JSON array of tracker serials such as `["LHR-EXAMPLE"]`. An empty or absent list disables recording. Two departures from optical tracking on the same device within five seconds trigger one incident. Coasting (inertial tracking) counts as loss of optical tracking. A position step exceeding the previous velocity prediction by 4 cm within 40 ms also triggers a recording while tracking stays valid. Fast physical motion can meet this threshold.
+
+Open `%LOCALAPPDATA%/openhouse/tracking-incidents` on Windows or `$XDG_DATA_HOME/openhouse/tracking-incidents` on Linux (default `~/.local/share/openhouse/tracking-incidents`). Sort by modification time. The driver keeps the latest 16 JSON Lines files locally and logs each saved path.
+
+Each file covers up to six seconds before the trigger and five seconds after it. Further triggers within that window are marked in the same file. The selected trackers share a host-monotonic timeline. Pose samples are taken at up to 100 Hz plus state transitions. Positions are in metres, orientations are quaternions ordered w, x, y, z. Compare filter position with smoothed output, pose age, optical update count, primary base and per-base coverage over the last half second. Radio rows include receiver frame rate and, on Doorman, signal and packet-loss statistics. Filter events include state transitions, input ages and reset explanations. To replay raw USB reports, use the existing manual session recording.
+
 ## Reporting a bug
 1. Click **Record session** in openhouse-overlay.
 2. Play until the problem happens and keep using it for a minute after it.
